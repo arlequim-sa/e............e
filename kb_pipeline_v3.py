@@ -36,9 +36,8 @@ def log(msg):
         line = "[" + timestamp + "] " + safe_msg + "\n"
         with open(LOG_FILE, "a", encoding="ascii", errors="replace") as f:
             f.write(line)
-        print(line.strip())
-    except Exception as e:
-        print("LOG ERROR: " + str(e))
+    except Exception:
+        pass
 
 
 def load_state():
