@@ -1,5 +1,5 @@
 """
-OMEGA KB Pipeline
+OMEGA KB Pipeline v2
 Monitora conversas do Open WebUI e salva conteudo [KB] automaticamente em D:\OMEGA\KB\
 Roda em background no FIRULLADO
 """
@@ -29,25 +29,37 @@ def log(msg):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{timestamp}] {msg}"
     print(line)
-    with open(LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(line + "\n")
+    try:
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        with open(LOG_FILE, "a", encoding="ascii", errors="ignore") as f:
+            f.write(line + "\n")
 
 
 def load_state():
     if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, "r") as f:
-            return json.load(f)
+        try:
+            with open(STATE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {"processed_messages": {}}
     return {"processed_messages": {}}
 
 
 def save_state(state):
-    with open(STATE_FILE, "w") as f:
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2)
 
 
 def get_chats():
     try:
-        r = requests.get(f"{OPENWEBUI_URL}/api/v1/chats/", headers=HEADERS, verify=False, timeout=10)
+        r = requests.get(
+            f"{OPENWEBUI_URL}/api/v1/chats/",
+            headers=HEADERS,
+            verify=False,
+            timeout=10
+        )
         if r.status_code == 200:
             return r.json()
         else:
@@ -60,7 +72,12 @@ def get_chats():
 
 def get_chat_messages(chat_id):
     try:
-        r = requests.get(f"{OPENWEBUI_URL}/api/v1/chats/{chat_id}", headers=HEADERS, verify=False, timeout=10)
+        r = requests.get(
+            f"{OPENWEBUI_URL}/api/v1/chats/{chat_id}",
+            headers=HEADERS,
+            verify=False,
+            timeout=10
+        )
         if r.status_code == 200:
             data = r.json()
             messages = data.get("chat", {}).get("messages", [])
@@ -73,15 +90,19 @@ def get_chat_messages(chat_id):
         return []
 
 
-def extract_kb_content(text):
-    if "[KB]" in text:
-        return text
-    return None
+def clean_title(title):
+    # Remove emojis e caracteres nao-ASCII
+    ascii_title = title.encode('ascii', 'ignore').decode('ascii')
+    # Remove caracteres invalidos para nome de arquivo
+    safe_title = re.sub(r'[^a-zA-Z0-9_\-\s]', '_', ascii_title).strip()
+    # Substitui espacos por underscore e limita tamanho
+    safe_title = re.sub(r'\s+', '_', safe_title)[:50]
+    return safe_title if safe_title else "OMEGA_KB"
 
 
 def save_to_kb(content, title):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_title = re.sub(r'[^a-zA-Z0-9_\-]', '_', title)[:50]
+    safe_title = clean_title(title)
     filename = os.path.join(KB_PATH, f"{safe_title}_{timestamp}.txt")
     try:
         with open(filename, "w", encoding="utf-8") as f:
@@ -91,6 +112,20 @@ def save_to_kb(content, title):
     except Exception as e:
         log(f"Erro ao salvar {filename}: {e}")
         return False
+
+
+def extract_text(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                parts.append(item.get("text", ""))
+            elif isinstance(item, str):
+                parts.append(item)
+        return " ".join(parts)
+    return ""
 
 
 def process_chats(state):
@@ -118,25 +153,26 @@ def process_chats(state):
             if msg_id in processed:
                 continue
 
+            # Marca como processada independente do resultado
+            processed[msg_id] = True
+
             # Processa so mensagens do assistente
             role = msg.get("role", "")
             if role != "assistant":
-                processed[msg_id] = True
                 continue
 
-            # Extrai conteudo
-            content = msg.get("content", "")
-            if isinstance(content, list):
-                content = " ".join([c.get("text", "") for c in content if isinstance(c, dict)])
+            # Extrai conteudo da mensagem
+            content = extract_text(msg.get("content", ""))
 
-            kb_content = extract_kb_content(content)
-            if kb_content:
-                title = chat.get("title", "OMEGA_KB")
-                if save_to_kb(kb_content, title):
-                    new_saves += 1
-                    log(f"[KB] detectado e salvo do chat: {chat.get('title', chat_id)}")
+            # Detecta [KB] APENAS no conteudo da mensagem, nao no titulo
+            if "[KB]" not in content:
+                continue
 
-            processed[msg_id] = True
+            # Salva o conteudo
+            chat_title = chat.get("title", "OMEGA_KB")
+            if save_to_kb(content, chat_title):
+                new_saves += 1
+                log(f"[KB] detectado e salvo — chat: {chat_title[:50]}")
 
         processed[f"chat_{chat_id}_updated"] = chat_updated
 
@@ -147,7 +183,7 @@ def process_chats(state):
 
 
 def main():
-    log("OMEGA KB Pipeline iniciando...")
+    log("OMEGA KB Pipeline v2 iniciando...")
     log(f"Monitorando: {OPENWEBUI_URL}")
     log(f"Salvando em: {KB_PATH}")
     log(f"Intervalo: {POLL_INTERVAL}s")
